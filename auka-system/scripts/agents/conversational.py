@@ -107,7 +107,7 @@ Escribe en lenguaje natural. ¡Estoy listo!
         """Clasificar intención con LLM."""
         prompt = f"""
         Clasifica en UNA categoría:
-        CONSULTA_DB, ACTIVAR_BUSQUEDA, CAMBIAR_ESTADO, RESUMEN, AYUDA, ESTRATEGIA, OTRO
+        CONSULTA_DB, ACTIVAR_BUSQUEDA (incluye web scraping, escanear perfiles y visitar links), CAMBIAR_ESTADO, RESUMEN, AYUDA, ESTRATEGIA, OTRO
         
         Mensaje: "{mensaje}"
         Responde SOLO la categoría.
@@ -164,6 +164,9 @@ Escribe en lenguaje natural. ¡Estoy listo!
             params = validate_json_output(response)
         except Exception:
             params = {"objetivo": "eventos", "ciudad": "Caracas"}
+        
+        # Guardar el mensaje original para que el Director tenga contexto (URLs, detalles)
+        params["mensaje_original"] = mensaje
         
         return {
             "tipo": "confirmacion_busqueda",

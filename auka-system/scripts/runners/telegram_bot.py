@@ -213,152 +213,8 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ═══════════════════════════════════════════════════════════════
 # BÚSQUEDA REAL CON FEEDBACK EN TIEMPO REAL
 # ═══════════════════════════════════════════════════════════════
-
-async def execute_real_search(context, chat_id, city, query, limit=10):
-    """Ejecutar búsqueda real en Google Maps con feedback progresivo."""
-    from scripts.scrapers.google_maps import GoogleMapsScraper
-    from scripts.scrapers.instagram import InstagramScraper
-    from scripts.utils.llm_client import LLMClient
-    import asyncio
-    
-    full_query = f"{query} {city}"
-    
-    # 1. Notificar inicio
-    await safe_send(context, chat_id, f"🔍 Buscando *{full_query}* en la Web (Maps) e Instagram...")
-    
-    # 2. Ejecutar scraping (Google Maps + Instagram en paralelo)
-    maps_results = []
-    ig_results = []
-    
-    async def run_maps():
-        try:
-            scraper = GoogleMapsScraper()
-            return await scraper.search(full_query, limit=limit)
-        except Exception as e:
-            logger.error(f"Maps error: {e}")
-            return []
-
-    async def run_ig():
-        try:
-            scraper = InstagramScraper()
-            # Convertir query a hashtag simple
-            hashtag = query.replace(" ", "").replace("de", "") + city.replace(" ", "")
-            return await scraper.search_by_hashtag(hashtag, limit=5)
-        except Exception as e:
-            logger.error(f"IG error: {e}")
-            return []
-
-    maps_results, ig_results = await asyncio.gather(run_maps(), run_ig())
-    results = maps_results + (ig_results or [])
-    
-    if not results:
-        await safe_send(context, chat_id, "😕 No se encontraron resultados en Maps ni en Instagram. Intenta con otra búsqueda.")
-        return
-    
-    await safe_send(context, chat_id, f"✅ *{len(results)} empresas encontradas!*")
-    
-    # 3. Mostrar resultados rápidos
-    preview = ""
-    for i, r in enumerate(results[:8], 1):
-        if 'username' in r: # Instagram
-            nombre = f"@{r.get('username')}"
-            cat = "Instagram"
-            telefono = ""
-        else: # Maps
-            nombre = r.get('title', 'Sin nombre')
-            telefono = r.get('phone', '')
-            cat = r.get('category', 'Maps')
-            
-        preview += f"{i}. *{nombre}*"
-        if cat:
-            preview += f" ({cat})"
-        if telefono:
-            preview += f"\n   📞 {telefono}"
-        preview += "\n"
-    
-    if len(results) > 5:
-        preview += f"\n_...y {len(results) - 5} más_"
-    
-    await safe_send(context, chat_id, preview)
-    
-    # 4. Guardar en DB
-    await safe_send(context, chat_id, "💾 Guardando en la base de datos...")
-    
-    saved = 0
-    for r in results:
-        try:
-            if 'username' in r: # Instagram format
-                prospecto = {
-                    "empresa": r.get("username"),
-                    "ubicacion": city,
-                    "instagram": f"https://instagram.com/{r.get('username')}",
-                    "notas": r.get("caption", "")[:200],
-                    "ciudad": city,
-                    "fuente": "instagram",
-                    "estado": "nuevo",
-                    "prioridad": "MEDIA",
-                    "raw_data": json.dumps(r, ensure_ascii=False),
-                }
-            else: # Maps format
-                prospecto = {
-                    "empresa": r.get("title"),
-                    "ubicacion": r.get("address"),
-                    "telefono": r.get("phone"),
-                    "web": r.get("website"),
-                    "ciudad": city,
-                    "fuente": "google_maps",
-                    "estado": "nuevo",
-                    "prioridad": "MEDIA",
-                    "raw_data": json.dumps(r, ensure_ascii=False),
-                }
-            result_db = await db.upsert_prospecto(prospecto)
-            if result_db.get("success"):
-                saved += 1
-        except Exception as e:
-            logger.debug(f"Error guardando: {e}")
-    
-    await safe_send(context, chat_id, f"💾 *{saved}/{len(results)}* prospectos guardados en Supabase")
-    
-    # 5. Análisis con LLM
-    await safe_send(context, chat_id, "🧠 Analizando con Kimi K2.6...")
-    
-    try:
-        llm = LLMClient()
-        companies_text = "\n".join([
-            f"- {r.get('title', '?')} ({r.get('category', 'N/A')}) - {r.get('address', 'N/A')}"
-            for r in results[:5]
-        ])
-        
-        prompt = f"""Analiza estas empresas para prospección de Aguas Arauka (agua embotellada premium para eventos).
-        
-Empresas encontradas buscando "{query}" en {city}:
-{companies_text}
-
-Responde en JSON:
-{{"resumen": "...", "mejores_prospectos": ["nombre1", "nombre2"], "recomendacion": "..."}}"""
-        
-        analysis = await asyncio.to_thread(llm.generate_json, prompt)
-        
-        if "error" not in analysis:
-            text = (
-                "📊 *Análisis IA:*\n\n"
-                f"📝 {analysis.get('resumen', 'N/A')}\n\n"
-            )
-            mejores = analysis.get("mejores_prospectos", [])
-            if mejores:
-                text += f"🎯 *Mejores:* {', '.join(mejores)}\n"
-            text += f"\n💡 {analysis.get('recomendacion', 'N/A')}"
-            await safe_send(context, chat_id, text)
-    except Exception as e:
-        logger.warning(f"Análisis LLM falló: {e}")
-    
-    # 6. Resumen final
-    await safe_send(
-        context, chat_id,
-        f"✅ *Scan completado!*\n"
-        f"📊 {saved} prospectos nuevos en la base de datos.\n"
-        f"📱 Usa /prospectos para ver la lista completa."
-    )
+# HANDLER DE MENSAJES NATURALES
+# ═══════════════════════════════════════════════════════════════
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -380,57 +236,32 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         if text.lower() in ["sí", "si", "yes", "confirmar", "dale", "ok", "s"]:
             del pending_confirmations[user_id_str]
-            await safe_send(context, chat_id, "🚀 *Búsqueda iniciada!* Esto tardará ~30 segundos...")
-            await execute_real_search(context, chat_id, conf["city"], conf["query"])
+            await safe_send(context, chat_id, "🚀 *Iniciando pipeline de inteligencia...* Esto puede tardar entre 30 y 60 segundos.")
+            
+            from main import auka_system
+            try:
+                # Ejecutamos el pipeline completo
+                result = await auka_system.process_request(
+                    user_input=conf.get("original_text", text), 
+                    user_id=user_id_str, 
+                    canal="telegram"
+                )
+                
+                respuesta = result.get("respuesta_texto", "Búsqueda completada sin respuesta del agente.")
+                if len(respuesta) > 4000:
+                    respuesta = respuesta[:4000] + "\n\n[Truncado...]"
+                
+                await safe_send(context, chat_id, respuesta)
+            except Exception as e:
+                logger.error(f"Error ejecutando pipeline: {e}")
+                await safe_send(context, chat_id, "❌ Hubo un error ejecutando el pipeline de agentes.")
             return
+            
         elif text.lower() in ["no", "cancelar", "cancel", "n"]:
             del pending_confirmations[user_id_str]
             await safe_send(context, chat_id, "❌ Búsqueda cancelada.")
             return
-    
-    # ── Detectar intención de búsqueda rápida (sin LLM) ──
-    text_lower = text.lower()
-    
-    # Detectar "busca/buscar/encuentra" + ciudad
-    ciudades_map = {"caracas": "Caracas", "valencia": "Valencia", "maracay": "Maracay", "la guaira": "La Guaira"}
-    
-    is_search = any(word in text_lower for word in ["busca", "buscar", "encuentra", "escanea", "scan"])
-    
-    if is_search:
-        # Extraer ciudad
-        detected_city = "Caracas"  # default
-        for key, val in ciudades_map.items():
-            if key in text_lower:
-                detected_city = val
-                break
-        
-        # Extraer query contextual
-        query = "productoras de eventos"
-        if "deportiv" in text_lower:
-            query = "eventos deportivos"
-        elif "corporativ" in text_lower:
-            query = "eventos corporativos"
-        elif "empresa" in text_lower:
-            query = "empresas de eventos"
-        elif "salon" in text_lower or "salón" in text_lower:
-            query = "salones de eventos"
-        elif "restaurant" in text_lower or "restaurante" in text_lower:
-            query = "restaurantes para eventos"
-        elif "prospect" in text_lower or "evento" in text_lower:
-            query = "productoras de eventos"
-        
-        # Pedir confirmación
-        await safe_send(
-            context, chat_id,
-            f"🔍 Voy a buscar *{query}* en *{detected_city}*.\n¿Confirmas? (sí/no)"
-        )
-        pending_confirmations[user_id_str] = {
-            "action": "search",
-            "city": detected_city,
-            "query": query
-        }
-        return
-    
+
     # ── Usar el agente conversacional para el resto ──
     await context.bot.send_chat_action(chat_id=chat_id, action="typing")
     
@@ -454,7 +285,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pending_confirmations[user_id_str] = {
                     "action": "search",
                     "city": params.get("ciudad", "Caracas"),
-                    "query": params.get("objetivo", "productoras de eventos")
+                    "query": params.get("objetivo", "productoras de eventos"),
+                    "original_text": params.get("mensaje_original", text)
                 }
         
         await safe_send(context, chat_id, respuesta)
