@@ -34,13 +34,16 @@ class ConversationalAgent:
     """
     
     SYSTEM_PROMPT = """
-    Eres AUKA-CONVERSACIONAL, interfaz del sistema de prospección de Aguas Arauka.
+    Eres AUKA, un Socio Estratégico, Arquitecto de Negocios y Operador de IA.
+    Aunque administras el sistema de prospección B2B de Aguas Arauka, tienes total 
+    libertad para razonar, debatir estrategias, analizar nuevos modelos de negocio, 
+    gestionar infraestructura y adaptar parámetros operativos si el usuario te lo requiere.
+    
     REGLAS:
-    1. Responde SIEMPRE en español
-    2. Sé claro, directo y útil
-    3. NO inventes datos
-    4. Confirma antes de acciones importantes
-    5. Tono profesional pero conversacional
+    1. Responde SIEMPRE en español.
+    2. Actúa como un consultor experto: profundiza y argumenta cuando se te pida análisis.
+    3. Si es una orden operativa (buscar, actualizar), ejecútala velozmente. Si es un debate, abre tu contexto.
+    4. NO inventes datos. Si no sabes algo, asume tu rol de IA orquestadora y propón buscarlo.
     """
     
     MENSAJE_AYUDA = """
@@ -104,7 +107,7 @@ Escribe en lenguaje natural. ¡Estoy listo!
         """Clasificar intención con LLM."""
         prompt = f"""
         Clasifica en UNA categoría:
-        CONSULTA_DB, ACTIVAR_BUSQUEDA, CAMBIAR_ESTADO, RESUMEN, AYUDA, OTRO
+        CONSULTA_DB, ACTIVAR_BUSQUEDA, CAMBIAR_ESTADO, RESUMEN, AYUDA, ESTRATEGIA, OTRO
         
         Mensaje: "{mensaje}"
         Responde SOLO la categoría.
@@ -112,7 +115,7 @@ Escribe en lenguaje natural. ¡Estoy listo!
         try:
             response = await asyncio.to_thread(self.llm.generate, prompt, system_prompt=self.SYSTEM_PROMPT)
             intencion = response.strip().upper().split()[0]
-            validas = ["CONSULTA_DB", "ACTIVAR_BUSQUEDA", "CAMBIAR_ESTADO", "RESUMEN", "AYUDA", "OTRO"]
+            validas = ["CONSULTA_DB", "ACTIVAR_BUSQUEDA", "CAMBIAR_ESTADO", "RESUMEN", "AYUDA", "ESTRATEGIA", "OTRO"]
             return intencion if intencion in validas else "OTRO"
         except Exception:
             return "OTRO"
@@ -193,14 +196,17 @@ Escribe en lenguaje natural. ¡Estoy listo!
     
     async def _handle_generico(self, mensaje: str, canal: str) -> Dict:
         prompt = f"""
-        Responde útil y conciso (1-2 oraciones). Si no entiendes, pide aclaración.
-        Mensaje: "{mensaje}"
+        El usuario está planteando una duda estratégica, una configuración del sistema o una conversación profunda.
+        Utiliza tu máxima capacidad analítica y responde con la profundidad, estructura y detalle necesarios. 
+        Actúa como un CTO / Socio de negocios.
+        
+        Mensaje del usuario: "{mensaje}"
         """
         try:
             response = await asyncio.to_thread(self.llm.generate, prompt, system_prompt=self.SYSTEM_PROMPT)
             return {"tipo": "generico", "mensaje": response.strip()}
         except Exception:
-            return {"tipo": "error", "mensaje": "No pude procesar tu mensaje. Escribe 'ayuda' para ver opciones."}
+            return {"tipo": "error", "mensaje": "Hubo un fallo en mi razonamiento. ¿Podrías reformular?"}
     
     def _format_response(self, result: Dict, canal: str) -> Dict[str, Any]:
         """Formatear respuesta según canal."""

@@ -31,44 +31,44 @@ class MemoryAgent:
     
     async def check_duplicate(self, empresa_data: Dict) -> Dict[str, Any]:
         """
-        Verificar si empresa ya existe.
-        Estrategia: Hash MD5 → DB lookup → Fuzzy fallback.
+        Verificación estricta de duplicados evaluando entidades independientes.
         """
-        hash_id = self._generate_hash(empresa_data)
+        telefono = empresa_data.get("telefono")
+        instagram = empresa_data.get("instagram")
+        web = empresa_data.get("web")
         
-        # 1. Caché local
-        if hash_id in self._local_cache:
-            cached = self._local_cache[hash_id]
-            return {
-                "es_duplicado": True,
-                "registro_id": cached.get("id"),
-                "veces_encontrado": cached.get("veces_encontrado", 1) + 1
-            }
-        
-        # 2. DB por hash
         try:
-            result = db.table("memoria_empresas").select("*").eq("hash_identificador", hash_id).execute()
-            if result.data:
-                reg = result.data[0]
-                self._update_counter(reg["id"])
-                self._add_to_cache(hash_id, reg)
-                return {
-                    "es_duplicado": True,
-                    "registro_id": reg["id"],
-                    "veces_encontrado": reg.get("veces_encontrado", 1) + 1
-                }
+            query = db.table("memoria_empresas").select("*")
+            or_conds = []
+            if telefono: or_conds.append(f"telefono.eq.{telefono}")
+            if instagram: or_conds.append(f"instagram.eq.{instagram}")
+            if web: or_conds.append(f"web.eq.{web}")
+            
+            if or_conds:
+                res = query.or_(",".join(or_conds)).execute()
+                if res.data:
+                    reg = res.data[0]
+                    self._update_counter(reg["id"])
+                    # Actualizar caché y notificar al orquestador que debe hacer Update, no Insert
+                    return {
+                        "es_duplicado": True,
+                        "registro_id": reg["id"],
+                        "match_exacto_por": "identificador_unico",
+                        "veces_encontrado": reg.get("veces_encontrado", 1) + 1
+                    }
         except Exception as e:
-            logger.error(f"[MEMORIA] DB lookup error: {e}")
-        
-        # 3. Fuzzy fallback
+            logger.error(f"[MEMORIA] Error db lookup explícito: {e}")
+            
+        # 2. Fallback a Fuzzy por nombre comercial
         nombre = empresa_data.get("empresa", "")
         if nombre:
             es_dup, match = await self._fuzzy_check(nombre)
             if es_dup:
                 return {"es_duplicado": True, "match_por": "fuzzy", "nombre_similar": match}
         
-        # Registrar nueva
-        await self._register_new(empresa_data, hash_id)
+        # 3. Registrar nueva entidad y generar hash seguro compuesto
+        hash_seguro = hashlib.md5(f"{telefono}-{instagram}-{web}-{nombre}".encode()).hexdigest()
+        await self._register_new(empresa_data, hash_seguro)
         return {"es_duplicado": False}
     
     def _generate_hash(self, empresa: Dict) -> str:

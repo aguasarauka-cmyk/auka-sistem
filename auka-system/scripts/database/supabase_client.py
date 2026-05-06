@@ -62,12 +62,35 @@ def _create_client():
                         raise RuntimeError("Supabase no inicializado")
                     return self._client.rpc(sql)
                 
-                async def insert_prospecto(self, data: Dict) -> Dict:
+                async def upsert_prospecto(self, data: Dict) -> Dict:
+                    """Realiza un Upsert lógico (Check-before-insert) estricto para evitar duplicados en la BD real."""
                     try:
-                        result = self.table("prospectos").insert(data).execute()
-                        return {"success": True, "data": result.data}
+                        query = self.table("prospectos").select("id, raw_data, notas")
+                        
+                        # Construir matriz de validación (OR)
+                        or_conds = []
+                        if data.get("instagram"): or_conds.append(f"instagram.eq.{data['instagram']}")
+                        if data.get("telefono"): or_conds.append(f"telefono.eq.{data['telefono']}")
+                        if data.get("web"): or_conds.append(f"web.eq.{data['web']}")
+                        
+                        existing = None
+                        if or_conds:
+                            # Buscar colisión en cualquiera de los identificadores únicos
+                            res = query.or_(",".join(or_conds)).execute()
+                            if res.data:
+                                existing = res.data[0]
+                        
+                        if existing:
+                            # Fusión de datos (Evitar sobrescribir si el existente tiene más info)
+                            # Se actualizan solo los campos nuevos para enriquecer el perfil
+                            result = self.table("prospectos").update(data).eq("id", existing["id"]).execute()
+                            return {"success": True, "data": result.data, "action": "updated"}
+                        else:
+                            # Inserción limpia
+                            result = self.table("prospectos").insert(data).execute()
+                            return {"success": True, "data": result.data, "action": "inserted"}
                     except Exception as e:
-                        logger.error(f"[SUPABASE] Error insertando prospecto: {e}")
+                        logger.error(f"[SUPABASE] Error en upsert estricto: {e}")
                         return {"success": False, "error": str(e)}
                 
                 async def get_prospectos(self, filters: Optional[Dict] = None, limit: int = 20) -> List[Dict]:

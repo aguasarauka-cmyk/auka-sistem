@@ -333,13 +333,41 @@ class SQLiteClient:
         # Not directly equivalent, but provides basic functionality
         return sql
     
-    async def insert_prospecto(self, data: Dict) -> Dict:
-        """Insertar prospecto en tabla prospectos."""
+    async def upsert_prospecto(self, data: Dict) -> Dict:
+        """Realiza un Upsert lógico (Check-before-insert) estricto para evitar duplicados en la BD real."""
         try:
-            result = self.table("prospectos").insert(data).execute()
-            return {"success": True, "data": result.data}
+            query = self.table("prospectos").select("id, raw_data, notas")
+            
+            # Construir matriz de validación (OR)
+            or_conds = []
+            if data.get("instagram"): or_conds.append(("instagram", "=", data['instagram']))
+            if data.get("telefono"): or_conds.append(("telefono", "=", data['telefono']))
+            if data.get("web"): or_conds.append(("web", "=", data['web']))
+            
+            existing = None
+            if or_conds:
+                # Buscar colisión. SQLiteQueryBuilder doesnt natively support or_, so we just execute a manual OR search here for compatibility.
+                # To keep it simple and compatible with our custom SQLiteBuilder:
+                conn = sqlite3.connect(self._db_path)
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                try:
+                    where_clauses = " OR ".join([f"{col} = '{val}'" for col, op, val in or_conds])
+                    cursor.execute(f"SELECT id, raw_data, notas FROM auka_prospectos WHERE {where_clauses}")
+                    row = cursor.fetchone()
+                    if row:
+                        existing = dict(row)
+                finally:
+                    conn.close()
+            
+            if existing:
+                result = self.table("prospectos").update(data).eq("id", existing["id"]).execute()
+                return {"success": True, "data": result.data, "action": "updated"}
+            else:
+                result = self.table("prospectos").insert(data).execute()
+                return {"success": True, "data": result.data, "action": "inserted"}
         except Exception as e:
-            logger.error(f"[SQLITE] Error insertando prospecto: {e}")
+            logger.error(f"[SQLITE] Error en upsert estricto: {e}")
             return {"success": False, "error": str(e)}
     
     async def get_prospectos(self, filters: Optional[Dict] = None, limit: int = 20) -> List[Dict]:

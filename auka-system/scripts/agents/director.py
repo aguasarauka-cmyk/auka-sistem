@@ -101,13 +101,15 @@ class DirectorAgent:
         return validated
     
     def _understand(self, input_data: Dict) -> Dict:
-        """Fase 1: Extraer intención, entidades y contexto."""
+        """Fase 1: Extraer intención, entidades, fuentes y contexto."""
         content = input_data.get("content", "")
         
         prompt = f"""
         Analiza el mensaje y extrae en JSON:
-        - intencion_principal: qué quiere el usuario (buscar/consultar/analizar/actualizar/resumen)
+        - intencion_principal: buscar/consultar/analizar/actualizar/resumen/estrategia
         - entidades: {{"ciudad": "...", "tipo_evento": "...", "empresa": "..."}}
+        - fuente_preferida: "google_maps", "instagram", "web", o "todas" (infiere según contexto)
+        - url: "url específica si el usuario pide analizar un enlace" (null si no hay)
         - urgencia: alta/media/baja
         
         Mensaje: "{content}"
@@ -116,11 +118,7 @@ class DirectorAgent:
         
         try:
             response = self.llm.generate(prompt, system_prompt=self.SYSTEM_PROMPT)
-            parsed = validate_json_output(response, default={
-                "intencion_principal": "desconocida",
-                "entidades": {},
-                "urgencia": "media"
-            })
+            parsed = validate_json_output(response, default={})
         except Exception as e:
             logger.warning(f"[DIRECTOR] Error entendiendo: {e}")
             parsed = {"intencion_principal": "desconocida", "entidades": {}, "urgencia": "media"}
@@ -129,6 +127,8 @@ class DirectorAgent:
             "original_input": input_data,
             "intention": parsed.get("intencion_principal", "desconocida"),
             "entities": parsed.get("entidades", {}),
+            "fuente_preferida": parsed.get("fuente_preferida", "todas"),
+            "url": parsed.get("url"),
             "urgency": parsed.get("urgencia", "media"),
             "type": input_data.get("type", "user")
         }
@@ -222,21 +222,33 @@ class DirectorAgent:
         }
     
     def _delegate(self, plan: Dict, classification: Dict) -> List[Dict]:
-        """Fase 4: Generar actions JSON para cada paso."""
+        """Fase 4: Generar actions JSON para cada paso con enrutamiento dinámico."""
         actions = []
         entities = plan.get("entities", {})
         
+        # Extraemos la metadata de enrutamiento previamente parseada
+        fuente = plan.get("fuente_preferida", "todas")
+        url = plan.get("url")
+
         for step in plan["steps"]:
+            # ACTUALIZACIÓN: Enrutamiento dinámico de la herramienta Scraper
+            if step["agent"] == "scraper" and step["task"] == "execute_search":
+                if url:
+                    step["task"] = "scrape_web"
+                elif fuente == "instagram":
+                    step["task"] = "search_instagram"
+                elif fuente == "google_maps":
+                    step["task"] = "search_maps"
+
             action = {
                 "agent": step["agent"],
                 "task": step["task"],
-                "params": self._build_params(step, entities),
+                "params": self._build_params(step, plan), # Se pasa el plan completo para contexto
                 "priority": classification["priority"],
                 "depends_on": actions[-1]["agent"] if actions else None,
                 "reason": step.get("reason", "")
             }
             actions.append(action)
-        
         return actions
     
     def _validate(self, actions: List[Dict], plan: Dict) -> Dict:
@@ -264,10 +276,12 @@ class DirectorAgent:
             "estimated_time_seconds": plan.get("estimated_duration", 180)
         }
     
-    def _build_params(self, step: Dict, entities: Dict) -> Dict:
-        """Construir parámetros para cada tipo de tarea."""
+    def _build_params(self, step: Dict, plan: Dict) -> Dict:
+        """Construir parámetros adaptados a la herramienta seleccionada."""
         agent = step["agent"]
         task = step["task"]
+        entities = plan.get("entities", {})
+        
         params = {}
         
         if agent == "explorador" and task == "generate_queries":
@@ -276,13 +290,20 @@ class DirectorAgent:
                 "location": entities.get("ciudad", "caracas"),
                 "event_type": entities.get("tipo_evento", None)
             }
-        elif agent == "scraper" and task == "execute_search":
-            params = {
-                "queries": [],
-                "sources": ["google_maps", "instagram"],
-                "limit": 20,
-                "location": entities.get("ciudad", "caracas")
-            }
+        elif agent == "scraper":
+            if task == "scrape_web":
+                return {"urls": [plan.get("url")]}
+            elif task == "search_instagram":
+                return {"hashtags": [entities.get("tipo_evento", "eventos")], "limit": 15}
+            elif task == "search_maps":
+                return {"queries": [entities.get("tipo_evento", "eventos")], "location": entities.get("ciudad", "caracas"), "limit": 20}
+            elif task == "execute_search":
+                return {
+                    "queries": [entities.get("tipo_evento", "eventos")],
+                    "sources": ["google_maps", "instagram"],
+                    "location": entities.get("ciudad", "caracas"),
+                    "limit": 20
+                }
         elif agent == "estructurador":
             params = {"source": "auto", "raw_data": {}}
         elif agent == "analista":
