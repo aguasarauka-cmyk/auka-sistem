@@ -311,7 +311,7 @@ async def execute_real_search(context, chat_id, city, query, limit=10):
                     "prioridad": "MEDIA",
                     "raw_data": json.dumps(r, ensure_ascii=False),
                 }
-            result_db = await db.insert_prospecto(prospecto)
+            result_db = await db.upsert_prospecto(prospecto)
             if result_db.get("success"):
                 saved += 1
         except Exception as e:
