@@ -1,0 +1,116 @@
+{
+  "project_state": {
+    "iteration_summary": "Generación y refinamiento visual del Lead Machine Dashboard (Auka). Se actualizaron los estilos generales con una paleta de tonos verdes elegantes. En la vista principal (Overview), se reordenó el layout deslizando los gráficos a la parte inferior y elevando la sección de 'Eventos Próximos', a la que se le añadió una vista detallada con información de contacto, ubicación, tipo, estado, prioridad y notas de cada prospecto.",
+    "tech_stack": {
+      "frontend": [
+        "React",
+        "Vite",
+        "TypeScript",
+        "React Router",
+        "Framer Motion",
+        "Recharts",
+        "React Leaflet",
+        "React Markdown"
+      ],
+      "backend_or_baas": [],
+      "styling": [
+        "Tailwind CSS",
+        "Lucide React"
+      ],
+      "state_management": [
+        "React useState",
+        "React Context (implicit via Router)"
+      ]
+    },
+    "sitemap": [
+      {
+        "path": "/",
+        "component": "Overview",
+        "description": "Dashboard principal con métricas clave, gráficos (barras y anillo) y lista de próximos eventos con mayor puntuación.",
+        "children": []
+      },
+      {
+        "path": "/prospects",
+        "component": "Prospects",
+        "description": "Tabla interactiva del directorio de leads/prospectos con barra de búsqueda, filtrado y panel lateral de detalle de empresa.",
+        "children": []
+      },
+      {
+        "path": "/map",
+        "component": "MapView",
+        "description": "Mapa interactivo renderizado con Leaflet que muestra la ubicación geográfica de los prospectos en Venezuela.",
+        "children": []
+      },
+      {
+        "path": "/agent",
+        "component": "AgentActivity",
+        "description": "Monitor estilo consola de la actividad del sistema autónomo en tiempo real con efecto de tipeo animado.",
+        "children": []
+      },
+      {
+        "path": "/chat",
+        "component": "Chat",
+        "description": "Interfaz conversacional para línea directa con el agente de IA, soportando renderizado de Markdown.",
+        "children": []
+      }
+    ],
+    "architecture_data_flow": {
+      "description": "Los datos fluyen unidireccionalmente desde el mock estático ('src/data/mockData.ts') hacia los componentes de página. El estado local ('useState') se usa para gestionar interacciones de UI como paneles laterales, términos de búsqueda, input de chat y renderizado persistente de logs.",
+      "database_schema_assumptions": [
+        "Entity: Prospect (id, empresa, evento, ciudad, tipo, score, prioridad, estado, lat, lng, telefono, email, notas, fecha)",
+        "Entity: logMessage (id, time, message, type)"
+      ]
+    },
+    "file_inventory": [
+      {
+        "file_path": "/src/App.tsx",
+        "responsibility": "Punto de entrada de la aplicación y configuración del enrutamiento."
+      },
+      {
+        "file_path": "/src/components/Layout.tsx",
+        "responsibility": "Envoltura estructural que incluye la barra lateral de navegación y el contenedor principal para las vistas animadas."
+      },
+      {
+        "file_path": "/src/data/mockData.ts",
+        "responsibility": "Almacén central de datos generados estáticamente para emular una API backend y popular el dashboard."
+      },
+      {
+        "file_path": "/src/pages/Overview.tsx",
+        "responsibility": "Página principal de resumen visual; despliega tarjetas de KPI y visualización de datos de prospectos a través de Recharts."
+      },
+      {
+        "file_path": "/src/pages/Prospects.tsx",
+        "responsibility": "Gestión de la lista tabular de clientes potenciales con funcionalidad de búsqueda/selección y un panel lateral deslizable de información de contacto."
+      },
+      {
+        "file_path": "/src/pages/MapView.tsx",
+        "responsibility": "Representación geoespacial de prospectos mediante marcadores de React Leaflet sobre un mapa base luminoso."
+      },
+      {
+        "file_path": "/src/pages/AgentActivity.tsx",
+        "responsibility": "Simulación visual del registro del sistema y logs en background; actúa como consola técnica para observar la actividad del bot."
+      },
+      {
+        "file_path": "/src/pages/Chat.tsx",
+        "responsibility": "Componente central para la interacción humana y de agente (simulado) para manejar mensajes enriquecidos o markdown bidireccionales."
+      }
+    ],
+    "antigravity_handoff": {
+      "mocked_data_points": [
+        "Lista de prospectos en `/src/data/mockData.ts`.",
+        "Historial y respuestas automáticas del sistema en `/src/pages/Chat.tsx`.",
+        "Secuencia de logs continuos en `/src/pages/AgentActivity.tsx`."
+      ],
+      "pending_integrations": [
+        "Sustituir `/src/data/mockData.ts` con una base de datos real (e.g., Firestore o backend HTTP).",
+        "Conectar la funcionalidad del Chat en `/src/pages/Chat.tsx` con la API de @google/genai para procesamiento inteligente de texto y comandos reales.",
+        "Canalizar transmisiones WebSocket para la actividad de logs en tiempo real hacia `/src/pages/AgentActivity.tsx`."
+      ],
+      "next_recommended_steps": [
+        "1. Integrar el setup de base de datos para la ingesta real (usar la tool set_up_firebase, por ejemplo).",
+        "2. Implementar endpoints/servicios para la creación dinámica de eventos y cálculo del Lead Score.",
+        "3. Actualizar la inyección de la API de LLM (Gemini) en la vista de chat (`src/pages/Chat.tsx`)."
+      ]
+    }
+  }
+}
