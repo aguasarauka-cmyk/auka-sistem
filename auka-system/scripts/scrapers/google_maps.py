@@ -33,13 +33,14 @@ class GoogleMapsScraper:
         self.delay_min = 1.5
         self.delay_max = 4.0
     
-    async def search(self, query: str, limit: int = 20) -> List[Dict]:
+    async def search(self, query: str, limit: int = 20, location_hint: str = "Venezuela") -> List[Dict]:
         """
         Buscar empresas en Google Maps.
         
         Args:
             query: Término de búsqueda (ej: "productoras de eventos caracas")
             limit: Máximo de resultados
+            location_hint: Hint de ubicación para forzar búsqueda en Venezuela
             
         Returns:
             Lista de dicts con datos de empresas
@@ -47,17 +48,26 @@ class GoogleMapsScraper:
         results = []
         seen_titles = set()
         
+        # Usar query directamente, sin forzar "Venezuela" (rompe la búsqueda de Maps)
+        # En su lugar, usamos locale es-VE y el parámetro near para geolocalización
+        forced_query = query
+        
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
             context = await browser.new_context(
                 user_agent=random.choice(self.USER_AGENTS),
                 viewport={"width": 1920, "height": 1080},
-                locale="es-VE"
+                locale="es-VE",
+                geolocation={"latitude": 10.4806, "longitude": -66.9036},  # Caracas
+                permissions=["geolocation"]
             )
             page = await context.new_page()
             
             try:
-                search_url = f"{self.BASE_URL}{query.replace(' ', '+')}"
+                search_url = f"{self.BASE_URL}{forced_query.replace(' ', '+')}/?hl=es-419"
+                if location_hint:
+                    search_url += f"&near={location_hint.replace(' ', '+')}"
+                    
                 logger.info(f"[MAPS] Navegando: {search_url}")
                 
                 await page.goto(search_url, wait_until="domcontentloaded")
@@ -74,7 +84,7 @@ class GoogleMapsScraper:
                     try:
                         await page.wait_for_selector('div.Nv2PK', timeout=10000)
                     except Exception:
-                        logger.warning(f"[MAPS] No se encontraron resultados para: {query}")
+                        logger.warning(f"[MAPS] No se encontraron resultados para: {forced_query}")
                         return []
                 
                 # Scroll progresivo
@@ -99,7 +109,7 @@ class GoogleMapsScraper:
                                 title_key = (data["title"] or "").lower().strip()
                                 if title_key and title_key not in seen_titles:
                                     seen_titles.add(title_key)
-                                    data["query_used"] = query
+                                    data["query_used"] = forced_query
                                     results.append(data)
                         except Exception as e:
                             logger.debug(f"[MAPS] Error extrayendo card: {e}")
@@ -126,7 +136,7 @@ class GoogleMapsScraper:
             finally:
                 await browser.close()
         
-        logger.info(f"[MAPS] '{query}': {len(results)} empresas extraídas")
+        logger.info(f"[MAPS] '{forced_query}': {len(results)} empresas extraídas")
         return results[:limit]
     
     async def _accept_cookies(self, page: Page):

@@ -75,7 +75,7 @@ Escribe en lenguaje natural. ¡Estoy listo!
     async def process_message(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Procesar mensaje del usuario.
-        Pipeline: CLASIFICAR → EJECUTAR → FORMATEAR
+        Pipeline: CLASIFICAR → VALIDAR_MODO → EJECUTAR → FORMATEAR
         """
         canal = input_data.get("canal", "telegram")
         mensaje = input_data.get("mensaje", "")
@@ -86,11 +86,23 @@ Escribe en lenguaje natural. ¡Estoy listo!
         # 1. CLASIFICAR
         intencion = await self._clasificar_intencion(mensaje)
         
-        # 2. EJECUTAR
-        if intencion == "CONSULTA_DB":
+        # 2. VALIDAR MODO DE PROSPECCIÓN (si es búsqueda)
+        if intencion == "ACTIVAR_BUSQUEDA":
+            modo_prospeccion = input_data.get("modo_prospeccion")
+            
+            # Si no viene el modo explícito, preguntar al usuario
+            if not modo_prospeccion:
+                modo_detectado = await self._detectar_modo_prospeccion(mensaje)
+                if not modo_detectado:
+                    return self._format_response({
+                        "tipo": "confirmacion_modo",
+                        "mensaje": "Para darte mejores resultados, ¿buscas empresas organizadoras de eventos o eventos específicos?"
+                    }, canal)
+                modo_prospeccion = modo_detectado
+            
+            result = await self._handle_busqueda(mensaje, canal, user_id, modo_prospeccion)
+        elif intencion == "CONSULTA_DB":
             result = await self._handle_consulta(mensaje, canal)
-        elif intencion == "ACTIVAR_BUSQUEDA":
-            result = await self._handle_busqueda(mensaje, canal, user_id)
         elif intencion == "CAMBIAR_ESTADO":
             result = await self._handle_update(mensaje, canal)
         elif intencion == "RESUMEN":
@@ -102,6 +114,28 @@ Escribe en lenguaje natural. ¡Estoy listo!
         
         # 3. FORMATEAR
         return self._format_response(result, canal)
+    
+    async def _detectar_modo_prospeccion(self, mensaje: str) -> Optional[str]:
+        """Detecta automáticamente el modo de prospección desde el mensaje del usuario."""
+        prompt = f"""
+        Analiza el siguiente mensaje y determina si el usuario busca:
+        - MODO_EMPRESAS: Información de empresas organizadoras de eventos (contacto, web, redes, etc.)
+        - MODO_EVENTOS: Información de eventos específicos (nombre, fecha, lugar, organizador, contacto)
+        
+        Mensaje: "{mensaje}"
+        
+        Responde SOLO con "MODO_EMPRESAS", "MODO_EVENTOS" o "INDETERMINADO".
+        """
+        try:
+            response = await asyncio.to_thread(self.llm.generate, prompt, system_prompt=self.SYSTEM_PROMPT)
+            modo = response.strip().upper()
+            if "MODO_EMPRESAS" in modo:
+                return "MODO_EMPRESAS"
+            elif "MODO_EVENTOS" in modo:
+                return "MODO_EVENTOS"
+            return None
+        except Exception:
+            return None
     
     async def _clasificar_intencion(self, mensaje: str) -> str:
         """Clasificar intención con LLM."""
@@ -153,7 +187,7 @@ Escribe en lenguaje natural. ¡Estoy listo!
         except Exception:
             return {}
     
-    async def _handle_busqueda(self, mensaje: str, canal: str, user_id: str) -> Dict:
+    async def _handle_busqueda(self, mensaje: str, canal: str, user_id: str, modo_prospeccion: str = "MODO_EMPRESAS") -> Dict:
         """Activar búsqueda."""
         prompt = f"""
         Extrae objetivo y ciudad: {{"objetivo": "...", "ciudad": "..."}}
@@ -167,10 +201,11 @@ Escribe en lenguaje natural. ¡Estoy listo!
         
         # Guardar el mensaje original para que el Director tenga contexto (URLs, detalles)
         params["mensaje_original"] = mensaje
+        params["modo_prospeccion"] = modo_prospeccion
         
         return {
             "tipo": "confirmacion_busqueda",
-            "mensaje": f"Voy a buscar {params.get('objetivo', 'eventos')} en {params.get('ciudad', 'Caracas')}. ¿Confirmas? (sí/no)",
+            "mensaje": f"Voy a buscar {params.get('objetivo', 'eventos')} en {params.get('ciudad', 'Caracas')}. Modo: {'Empresas' if modo_prospeccion == 'MODO_EMPRESAS' else 'Eventos'}. ¿Confirmas? (sí/no)",
             "params": params
         }
     

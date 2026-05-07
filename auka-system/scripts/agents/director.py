@@ -49,6 +49,11 @@ class DirectorAgent:
     6. SI un agente falla, reintenta con fuente alternativa
     7. NUNCA devuelvas texto libre - solo JSON estructurado
 
+    MODO DE PROSPECCIÓN:
+    - MODO_EMPRESAS: Buscar datos de empresas organizadoras de eventos (datos de contacto, web, redes, etc.).
+    - MODO_EVENTOS: Buscar eventos específicos que se realizarán en fechas determinadas (nombre del evento, fecha, lugar, organizador, contacto).
+    - El agente DEBE preguntar/confirmar el modo antes de iniciar la búsqueda si no está claro en la instrucción del usuario.
+
     AGENTES DISPONIBLES:
     - explorador: Genera queries y descubre fuentes
     - scraper: Ejecuta scripts de scraping (NO tiene LLM)
@@ -110,6 +115,7 @@ class DirectorAgent:
         - entidades: {{"ciudad": "...", "tipo_evento": "...", "empresa": "..."}}
         - fuente_preferida: "google_maps", "instagram", "web", o "todas" (infiere según contexto)
         - url: "url específica si el usuario pide analizar un enlace" (null si no hay)
+        - modo_prospeccion: "MODO_EMPRESAS" o "MODO_EVENTOS" (infiere según contexto)
         - urgencia: alta/media/baja
         
         Mensaje: "{content}"
@@ -121,14 +127,34 @@ class DirectorAgent:
             parsed = validate_json_output(response, default={})
         except Exception as e:
             logger.warning(f"[DIRECTOR] Error entendiendo: {e}")
-            parsed = {"intencion_principal": "desconocida", "entidades": {}, "urgencia": "media"}
+            parsed = {"intencion_principal": "desconocida", "entidades": {}, "urgencia": "media", "modo_prospeccion": None}
+        
+        # Fallback determinístico: extraer URL con regex si el LLM no la detectó
+        import re
+        detected_url = parsed.get("url")
+        if not detected_url:
+            url_match = re.search(r'https?://[^\s]+', content)
+            if url_match:
+                detected_url = url_match.group(0)
+                logger.info(f"[DIRECTOR] URL detectada por regex: {detected_url}")
+        
+        # Inferir fuente preferida según la URL
+        fuente = parsed.get("fuente_preferida", "todas")
+        if detected_url:
+            if "instagram.com" in detected_url:
+                fuente = "instagram"
+            elif "google.com/maps" in detected_url:
+                fuente = "google_maps"
+            else:
+                fuente = "web"
         
         return {
             "original_input": input_data,
             "intention": parsed.get("intencion_principal", "desconocida"),
             "entities": parsed.get("entidades", {}),
-            "fuente_preferida": parsed.get("fuente_preferida", "todas"),
-            "url": parsed.get("url"),
+            "fuente_preferida": fuente,
+            "url": detected_url,
+            "modo_prospeccion": parsed.get("modo_prospeccion"),
             "urgency": parsed.get("urgencia", "media"),
             "type": input_data.get("type", "user")
         }
@@ -137,11 +163,16 @@ class DirectorAgent:
         """Fase 2: Clasificar tarea y asignar prioridad."""
         intention = understood["intention"].lower()
         entities = understood.get("entities", {})
+        modo_prospeccion = understood.get("modo_prospeccion")
         
         intention_map = {
             "buscar": {"type": "search", "agent": "explorador", "priority": "high"},
             "encontrar": {"type": "search", "agent": "explorador", "priority": "high"},
             "rastrear": {"type": "search", "agent": "explorador", "priority": "high"},
+            "verificar": {"type": "search", "agent": "explorador", "priority": "high"},
+            "escanear": {"type": "search", "agent": "explorador", "priority": "high"},
+            "extraer": {"type": "search", "agent": "explorador", "priority": "high"},
+            "scrape": {"type": "search", "agent": "scraper", "priority": "high"},
             "analizar": {"type": "analyze", "agent": "analista", "priority": "medium"},
             "evaluar": {"type": "analyze", "agent": "analista", "priority": "medium"},
             "consultar": {"type": "query", "agent": "conversacional", "priority": "high"},
@@ -149,6 +180,7 @@ class DirectorAgent:
             "dame": {"type": "query", "agent": "conversacional", "priority": "high"},
             "resumen": {"type": "report", "agent": "conversacional", "priority": "low"},
             "estadisticas": {"type": "report", "agent": "conversacional", "priority": "low"},
+            "estrategia": {"type": "query", "agent": "conversacional", "priority": "medium"},
             "actualizar": {"type": "update", "agent": "conversacional", "priority": "medium"},
             "marcar": {"type": "update", "agent": "conversacional", "priority": "medium"},
         }
@@ -159,10 +191,17 @@ class DirectorAgent:
             "priority": "low"
         })
         
+        # OVERRIDE: Si hay una URL, SIEMPRE es una búsqueda/scrape, sin importar la intención parseada
+        if understood.get("url"):
+            classification = {"type": "search", "agent": "scraper", "priority": "high"}
+        
         # Subir prioridad si ciudad de alta prioridad
         city = (entities.get("ciudad") or "").lower()
         if city in ["caracas", "valencia"] and classification["priority"] != "high":
             classification["priority"] = "medium"
+        
+        # Añadir modo de prospección a la clasificación
+        classification["modo_prospeccion"] = modo_prospeccion
         
         return classification
     
@@ -170,6 +209,7 @@ class DirectorAgent:
         """Fase 3: Crear plan de ejecución óptimo."""
         task_type = classification["type"]
         entities = understood.get("entities", {})
+        modo_prospeccion = classification.get("modo_prospeccion")
         
         plans = {
             "search": {
@@ -218,6 +258,9 @@ class DirectorAgent:
             "description": selected_plan["description"],
             "steps": selected_plan["steps"],
             "entities": entities,
+            "fuente_preferida": understood.get("fuente_preferida", "todas"),
+            "url": understood.get("url"),
+            "modo_prospeccion": modo_prospeccion,
             "estimated_duration": self._estimate_duration(selected_plan["steps"])
         }
     
@@ -229,6 +272,7 @@ class DirectorAgent:
         # Extraemos la metadata de enrutamiento previamente parseada
         fuente = plan.get("fuente_preferida", "todas")
         url = plan.get("url")
+        modo_prospeccion = plan.get("modo_prospeccion")
 
         for step in plan["steps"]:
             # ACTUALIZACIÓN: Enrutamiento dinámico de la herramienta Scraper
@@ -239,6 +283,9 @@ class DirectorAgent:
                     step["task"] = "search_instagram"
                 elif fuente == "google_maps":
                     step["task"] = "search_maps"
+                
+                # Añadir modo de prospección a los parámetros del scraper
+                step["modo_prospeccion"] = modo_prospeccion
 
             action = {
                 "agent": step["agent"],
@@ -281,6 +328,7 @@ class DirectorAgent:
         agent = step["agent"]
         task = step["task"]
         entities = plan.get("entities", {})
+        modo_prospeccion = plan.get("modo_prospeccion", "MODO_EMPRESAS")
         
         params = {}
         
@@ -288,31 +336,38 @@ class DirectorAgent:
             params = {
                 "objective": entities.get("intencion", "eventos"),
                 "location": entities.get("ciudad", "caracas"),
-                "event_type": entities.get("tipo_evento", None)
+                "event_type": entities.get("tipo_evento", None),
+                "modo_prospeccion": modo_prospeccion
             }
         elif agent == "scraper":
             if task == "scrape_web":
-                return {"urls": [plan.get("url")]}
+                return {"urls": [plan.get("url")], "modo_prospeccion": modo_prospeccion}
             elif task == "search_instagram":
-                return {"hashtags": [entities.get("tipo_evento", "eventos")], "limit": 15}
+                return {"hashtags": [entities.get("tipo_evento", "eventos")], "limit": 15, "modo_prospeccion": modo_prospeccion}
             elif task == "search_maps":
-                return {"queries": [entities.get("tipo_evento", "eventos")], "location": entities.get("ciudad", "caracas"), "limit": 20}
+                return {
+                    "queries": [entities.get("tipo_evento", "eventos")],
+                    "location": entities.get("ciudad", "caracas"),
+                    "limit": 20,
+                    "modo_prospeccion": modo_prospeccion
+                }
             elif task == "execute_search":
                 return {
                     "queries": [entities.get("tipo_evento", "eventos")],
                     "sources": ["google_maps", "instagram"],
                     "location": entities.get("ciudad", "caracas"),
-                    "limit": 20
+                    "limit": 20,
+                    "modo_prospeccion": modo_prospeccion
                 }
         elif agent == "estructurador":
-            params = {"source": "auto", "raw_data": {}}
+            params = {"source": "auto", "raw_data": {}, "modo_prospeccion": modo_prospeccion}
         elif agent == "analista":
-            params = {"prospectos": []}
+            params = {"prospectos": [], "modo_prospeccion": modo_prospeccion}
         elif agent == "memoria":
             if task == "get_context":
                 params = {"scope": "last_24h"}
             elif task == "save_results":
-                params = {"results": []}
+                params = {"results": [], "modo_prospeccion": modo_prospeccion}
         
         return params
     

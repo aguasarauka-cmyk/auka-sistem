@@ -13,6 +13,7 @@ from telegram.ext import (
 )
 
 from scripts.agents.conversational import conversational_agent
+from scripts.agents.memory import memory_agent
 from config.settings import settings
 
 logger = logging.getLogger("auka.telegram")
@@ -24,6 +25,7 @@ class TelegramBot:
     def __init__(self):
         self.token = settings.TELEGRAM_BOT_TOKEN
         self.pending_confirmations = {}  # user_id → params
+        self.pending_modo = {}  # user_id → modo_prospeccion
     
     async def start(self):
         """Iniciar el bot."""
@@ -125,16 +127,54 @@ class TelegramBot:
         mensaje = update.message.text
         user_id = str(update.effective_user.id)
         
+        # Verificar pregunta de modo pendiente
+        if user_id in self.pending_modo:
+            modo = self._determinar_modo(mensaje)
+            if modo:
+                # Guardar modo y limpiar estado
+                self.pending_modo[user_id] = modo
+                await update.message.reply_text(
+                    f"✅ Modo seleccionada: *{modo}*\n\n"
+                    "Ahora confirmo: ¿busco eventos en Caracas? (sí/no)",
+                    parse_mode="Markdown"
+                )
+                return
+            elif mensaje.lower() in ["no", "cancelar"]:
+                await update.message.reply_text("❌ Cancelado.")
+                del self.pending_modo[user_id]
+                return
+        
         # Verificar confirmaciones pendientes
         if user_id in self.pending_confirmations:
-            if mensaje.lower() in ["sí", "si", "yes", "confirmar"]:
-                # Ejecutar búsqueda confirmada
-                await update.message.reply_text("🔍 Búsqueda iniciada. Te aviso cuando tenga resultados...")
+            if mensaje.lower() in ["sí", "si", "yes", "confirmar", "ok", "dale"]:
+                params = self.pending_confirmations[user_id]
+                # Incluye el modo si estaba seleccionado
+                modo = self.pending_modo.get(user_id)
+                if modo:
+                    params["modo_prospeccion"] = modo
+                
+                await update.message.reply_text("🔍 Ejecutando búsqueda... (solo Venezuela)")
+                
+                # Ejecutar búsqueda
+                result = await conversational_agent.process_message({
+                    "canal": "telegram",
+                    "user_id": user_id,
+                    "mensaje": f"busca en {params.get('ciudad', 'Caracas')}",
+                    "contexto": [],
+                    "modo_prospeccion": modo or "MODO_EMPRESAS"
+                })
+                
+                await update.message.reply_text(result.get("respuesta_texto", "Búsqueda completada"))
+                
                 del self.pending_confirmations[user_id]
+                if user_id in self.pending_modo:
+                    del self.pending_modo[user_id]
                 return
             elif mensaje.lower() in ["no", "cancelar"]:
                 await update.message.reply_text("❌ Búsqueda cancelada.")
                 del self.pending_confirmations[user_id]
+                if user_id in self.pending_modo:
+                    del self.pending_modo[user_id]
                 return
         
         # Procesar con agente conversacional
@@ -145,11 +185,41 @@ class TelegramBot:
             "contexto": []
         })
         
-        # Si requiere confirmación, guardar
+        # Guardar contexto conversacional
+        await memory_agent.save_conversational_context(
+            user_id=user_id,
+            ultimo_mensaje=mensaje,
+            modo_prospeccion=result.get("params", {}).get("modo_prospeccion")
+        )
+        
+        # Si requiere confirmación de modo, guardar
+        if result.get("accion_ejecutada") == "confirmacion_modo":
+            await update.message.reply_text(
+                result.get("respuesta_texto", "¿Busco empresas o eventos específicos?"),
+                parse_mode="Markdown"
+            )
+            self.pending_modo[user_id] = None  # Esperar respuesta del usuario
+            return
+        
+        # Si requiere confirmación de búsqueda, guardar
         if result.get("accion_ejecutada") == "confirmacion_busqueda":
             self.pending_confirmations[user_id] = result.get("params", {})
+            await update.message.reply_text(
+                result.get("respuesta_texto", "Confirmar búsqueda (sí/no)"),
+                parse_mode="Markdown"
+            )
+            return
         
         await update.message.reply_text(result["respuesta_texto"], parse_mode="Markdown")
+    
+    def _determinar_modo(self, mensaje: str) -> str:
+        """Determinar modo de prospección desde la respuesta del usuario."""
+        msg = mensaje.lower()
+        if any(p in msg for p in ["empresa", "contacto", "proveedor", "organizadora", "agencia"]):
+            return "MODO_EMPRESAS"
+        elif any(p in msg for p in ["evento", "fechas", "cuándo", "cuándo es"]):
+            return "MODO_EVENTOS"
+        return None
 
 
 # Instancia singleton

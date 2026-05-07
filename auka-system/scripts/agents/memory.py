@@ -37,6 +37,7 @@ class MemoryAgent:
         instagram = empresa_data.get("instagram")
         web = empresa_data.get("web")
         
+        # 1. Verificación exacta por identificadores únicos (teléfono, instagram, web)
         try:
             query = db.table("memoria_empresas").select("*")
             or_conds = []
@@ -48,6 +49,28 @@ class MemoryAgent:
                 res = query.or_(",".join(or_conds)).execute()
                 if res.data:
                     reg = res.data[0]
+                    self._update_counter(reg["id"])
+                    # Actualizar caché y notificar al orquestador que debe hacer Update, no Insert
+                    return {
+                        "es_duplicado": True,
+                        "registro_id": reg["id"],
+                        "match_exacto_por": "identificador_unico",
+                        "veces_encontrado": reg.get("veces_encontrado", 1) + 1
+                    }
+        except Exception as e:
+            logger.error(f"[MEMORIA] Error db lookup explí­cito: {e}")
+            
+        # 2. Fallback a Fuzzy por nombre comercial (umbral 0.85)
+        nombre = empresa_data.get("empresa", "")
+        if nombre:
+            es_dup, match = await self._fuzzy_check(nombre)
+            if es_dup:
+                return {"es_duplicado": True, "match_por": "fuzzy", "nombre_similar": match}
+        
+        # 3. Registrar nueva entidad y generar hash seguro compuesto
+        hash_seguro = hashlib.md5(f"{telefono}-{instagram}-{web}-{nombre}".encode()).hexdigest()
+        await self._register_new(empresa_data, hash_seguro)
+        return {"es_duplicado": False}
                     self._update_counter(reg["id"])
                     # Actualizar caché y notificar al orquestador que debe hacer Update, no Insert
                     return {
@@ -183,12 +206,79 @@ class MemoryAgent:
             f_r = db.table("memoria_fuentes").select("fuente, eficiencia_promedio").execute()
             fuentes = {f["fuente"]: f.get("eficiencia_promedio", 0) for f in (f_r.data or [])}
             
+            # Obtener contexto conversacional
+            contexto_conv = await self.get_conversational_context()
+            
             return {
                 "queries_realizadas": queries,
                 "empresas_procesadas": empresas,
                 "fuentes_rendimiento": fuentes,
                 "ciudades_cubiertas": ciudades,
                 "recomendacion": self._generate_recommendation(ciudades, fuentes),
+                "contexto_conversacional": contexto_conv,
+                "scope": scope
+            }
+        except Exception as e:
+            logger.error(f"[MEMORIA] Error contexto: {e}")
+            return self._default_context()
+    
+    # ═══════════════════════════════════════════════════════════════════════
+    # CONTEXTO CONVERSACIONAL (Persistir hilo de conversación)
+    # ═══════════════════════════════════════════════════════════════
+    
+    async def save_conversational_context(self, user_id: str, ultimo_mensaje: str, modo_prospeccion: str = None, ciudad_foco: str = None) -> Dict:
+        """Guardar contexto de la conversación actual."""
+        try:
+            # Buscar si ya existe contexto activo para este usuario
+            existente = db.table("conversaciones").select("*") \
+                .eq("user_id", user_id) \
+                .order("creado_en", desc=True) \
+                .limit(1).execute()
+            
+            if existente.data:
+                # Actualizar contexto existente
+                ctx = existente.data[0]
+                datos = ctx.get("datos", {}) or {}
+                datos["ultimo_mensaje"] = ultimo_mensaje
+                if modo_prospeccion: datos["modo_prospeccion"] = modo_prospeccion
+                if ciudad_foco: datos["ciudad_foco"] = ciudad_foco
+                
+                db.table("conversaciones").update({
+                    "respuesta_agente": f"Contexto actualizado: {ultimo_mensaje}",
+                    "datos": datos
+                }).eq("id", ctx["id"]).execute()
+                
+                return {"actualizado": True, "user_id": user_id}
+            else:
+                # Crear nuevo contexto
+                return db.table("conversaciones").insert({
+                    "user_id": user_id,
+                    "canal": "telegram",
+                    "mensaje_usuario": ultimo_mensaje,
+                    "respuesta_agente": "Iniciando contexto",
+                    "accion_ejecutada": "contexto_nuevo",
+                    "datos": {
+                        "ultimo_mensaje": ultimo_mensaje,
+                        "modo_prospeccion": modo_prospeccion,
+                        "ciudad_foco": ciudad_foco
+                    }
+                }).execute()
+        except Exception as e:
+            logger.error(f"[MEMORIA] Error guardando contexto: {e}")
+            return {"actualizado": False, "error": str(e)}
+    
+    async def get_conversational_context(self, user_id: str = None, limit: int = 5) -> List[Dict]:
+        """Obtener contexto conversacional previo."""
+        try:
+            query = db.table("conversaciones").select("user_id, mensaje_usuario, respuesta_agente, accion_ejecutada, datos, creado_en")
+            if user_id:
+                query = query.eq("user_id", user_id)
+            query = query.order("creado_en", desc=True).limit(limit)
+            result = query.execute()
+            return result.data or []
+        except Exception as e:
+            logger.warning(f"[MEMORIA] Error recuperando contexto: {e}")
+            return []
                 "scope": scope
             }
         except Exception as e:

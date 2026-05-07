@@ -64,14 +64,18 @@ class ScraperAgent:
         location = params.get("location", "")
         limit = params.get("limit", 20)
         
+        # Forzar filtro geográfico de Venezuela en todas las queries
+        venezuela_queries = [f"{q} Venezuela" for q in queries]
+        
         all_results = []
         errors = []
         
-        for query in queries:
+        for query in venezuela_queries:
             try:
                 results = await self.maps_scraper.search(
-                    query=f"{query} {location}".strip(),
-                    limit=limit
+                    query=query,
+                    limit=limit,
+                    location_hint="Venezuela"
                 )
                 all_results.extend(results)
                 await asyncio.sleep(random.uniform(2, 5))
@@ -87,8 +91,9 @@ class ScraperAgent:
             "meta": {
                 "source": "google_maps",
                 "count": len(normalized),
-                "queries_executed": len(queries),
-                "errors": errors or None
+                "queries_executed": len(venezuela_queries),
+                "errors": errors or None,
+                "filtro_geografico": "Venezuela (forzado)"
             }
         }
     
@@ -201,11 +206,27 @@ class ScraperAgent:
         }
     
     def _extract_city(self, address: str) -> Optional[str]:
-        """Extraer ciudad de dirección venezolana."""
+        """Extraer ciudad de dirección venezolana y validar que no sea de otro paí­s."""
         if not address:
             return None
-        cities = ["caracas", "valencia", "maracay", "la guaira"]
+        
+        # Lista de palabras clave que indican que NO es Venezuela
+        non_venezuelan_keywords = [
+            "spain", "españa", "madrid", "barcelona", "sevilla", "valencia, spain",
+            "colombia", "bogotá", "medellín", "mexico", "méxico", "cdmx",
+            "argentina", "buenos aires", "chile", "santiago", "peru", "lima",
+            "ecuador", "quito", "brasil", "são paulo", "rio de janeiro"
+        ]
+        
         address_lower = address.lower()
+        
+        # Detectar si la dirección parece ser de otro paí­s
+        for keyword in non_venezuelan_keywords:
+            if keyword in address_lower:
+                logger.warning(f"[GEO_FILTER] Dirección rechazada por indicar ubicación no venezolana: {address}")
+                return None
+        
+        cities = ["caracas", "valencia", "maracay", "la guaira", "barquisimeto", "maturín", "san cristobal", "puerto la cruz", "ciudad guayana", "punto fijo"]
         for city in cities:
             if city in address_lower:
                 return city.title()

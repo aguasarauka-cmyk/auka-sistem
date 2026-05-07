@@ -1,17 +1,19 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Prospect } from '../lib/data';
-import { Search, Filter, Phone, Mail, ChevronRight, X, PhoneCall, NotebookPen, CheckCircle, Clock, Loader2 } from 'lucide-react';
+import { Search, Filter, Phone, Mail, ChevronRight, X, PhoneCall, NotebookPen, CheckCircle, Clock, Loader2, FileText } from 'lucide-react';
 import { useProspects } from '../lib/useProspects';
 import { supabase } from '../lib/supabase';
 import { cn } from '../lib/utils';
 import gsap from 'gsap';
+import { ProposalModal } from '../components/ProposalModal';
 
 export function Prospects() {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedProspect, setSelectedProspect] = useState<Prospect | null>(null);
   const [isEditingNotes, setIsEditingNotes] = useState(false);
   const [notesDraft, setNotesDraft] = useState('');
+  const [isProposalModalOpen, setIsProposalModalOpen] = useState(false);
   const rowsRef = useRef<HTMLTableSectionElement>(null);
 
   const { prospects, loading, setProspects } = useProspects();
@@ -316,19 +318,30 @@ export function Prospects() {
               </div>
 
               {/* Actions Footer */}
-              <div className="p-6 border-t border-[#D8E3DB] bg-white grid grid-cols-2 gap-3">
-                <button className="flex items-center justify-center gap-2 bg-[#1B4332] hover:bg-[#2D6A4F] text-white py-3 rounded-xl text-sm font-bold transition-colors shadow-sm">
-                  <PhoneCall size={16} />
-                  Llamar
-                </button>
-                <button className="flex items-center justify-center gap-2 bg-white hover:bg-[#F8FAF9] border border-[#D8E3DB] text-[#1B4332] py-3 rounded-xl text-sm font-bold transition-colors shadow-sm">
-                  <Mail size={16} />
-                  Mensaje
-                </button>
+              <div className="p-6 border-t border-[#D8E3DB] bg-white space-y-3">
+                {selectedProspect.estado === 'contactado' && (
+                  <button 
+                    onClick={() => setIsProposalModalOpen(true)}
+                    className="w-full flex items-center justify-center gap-2 bg-[#22C55E] hover:bg-[#16A34A] text-white py-3 rounded-xl text-sm font-bold transition-colors shadow-sm"
+                  >
+                    <FileText size={16} />
+                    Generar Propuesta y Enviar por WhatsApp
+                  </button>
+                )}
+                <div className="grid grid-cols-2 gap-3">
+                  <button className="flex items-center justify-center gap-2 bg-[#1B4332] hover:bg-[#2D6A4F] text-white py-3 rounded-xl text-sm font-bold transition-colors shadow-sm">
+                    <PhoneCall size={16} />
+                    Llamar
+                  </button>
+                  <button className="flex items-center justify-center gap-2 bg-white hover:bg-[#F8FAF9] border border-[#D8E3DB] text-[#1B4332] py-3 rounded-xl text-sm font-bold transition-colors shadow-sm">
+                    <Mail size={16} />
+                    Mensaje
+                  </button>
+                </div>
                 <button 
                   onClick={() => handleUpdateStatus(selectedProspect.id, selectedProspect.estado === 'contactado' ? 'nuevo' : 'contactado')}
                   className={cn(
-                    "col-span-2 flex items-center justify-center gap-2 py-3 rounded-xl text-sm font-bold transition-colors shadow-sm mt-1",
+                    "w-full flex items-center justify-center gap-2 py-3 rounded-xl text-sm font-bold transition-colors shadow-sm",
                     selectedProspect.estado === 'contactado' 
                       ? "bg-white border border-[#D8E3DB] text-[#52796F] hover:bg-[#F8FAF9]" 
                       : "bg-[#F1F5F2] hover:bg-[#E2E8E4] text-[#1B4332]"
@@ -342,6 +355,12 @@ export function Prospects() {
           </>
         )}
       </AnimatePresence>
+
+      <ProposalModal 
+        isOpen={isProposalModalOpen}
+        onClose={() => setIsProposalModalOpen(false)}
+        prospect={selectedProspect}
+      />
     </div>
   );
 }
